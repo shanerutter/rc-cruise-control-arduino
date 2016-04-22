@@ -1,5 +1,8 @@
 // TODO: No signal disable cruise
+// TODO: Determine center off-set automatically
+// TODO: Determine forward / reverse directions
 // TODO: Test on other recievers / setups
+// TODO: Trigger programming mode (AUX + Break) on startup within 500ms of starting
 
 /*
  * Pin assignemnt
@@ -11,15 +14,29 @@ const short recieverAuxPin = 3; // Reciever input (Digital input)
 const short recieverAuxInterruptPin = 1; // Reciever input (Interrupt), same pin as recieverPin but the interrupt ID
 const short recieverOutPin = 7; // Pin used for killing engine
 const short recieverOutPinBit = 7; // Related to "PORTD" bit mapping (fast updating via bit mapping)
+const short statusLEDPin = 13;
 
 /*
  * Variables
  */
-volatile uint32_t recieveThrottleShared = 0; // Recieve position data (shared between interrupt and main loop)
-volatile uint32_t recieveAuxShared = 0; // Recieve position data (shared between interrupt and main loop)
+volatile short recieveThrottleShared = 0; // Recieve position data (shared between interrupt and main loop)
+volatile short recieveAuxShared = 0; // Recieve position data (shared between interrupt and main loop)
 bool cruiseControl = false;
 short savedCruiseSpeed = 0;
 unsigned long lastMillis = 0;
+unsigned short operationMode = 0;
+unsigned short configureStage = 0;
+
+// Config variables for storing data during config mode
+// These are parsed and saved into the EEPROM
+short cReverseStartingPos, cReverseToCenter, cCenterToThrottle, cThrottleToCenter;
+
+
+bool reversedRecieverInput = false; // Do we have reversed reciever input? E.G 1000 is full throttle instead of 2000
+short reverseCenterOffset = 20;
+short throttleCenterOffset = 20;
+
+
 
 
 /*
@@ -34,6 +51,9 @@ void setup() {
     pinMode(recieverAuxPin, INPUT); // Make are reciever pin an input
     attachInterrupt(recieverAuxInterruptPin, calcRecieverAuxPin, CHANGE); // Trigger interrupt and call calcRecieverPin runction each time a change is detected
 
+    pinMode(statusLEDPin, OUTPUT);
+    digitalWrite(statusLEDPin, LOW);
+
     //Serial.begin(9600);
 }
 
@@ -42,8 +62,8 @@ void setup() {
  */
 void loop() {
   // Lets store the shared data into temp local variables, this allows us to quickly disable interrupts and enable again as quickly as possible
-  static uint32_t recieveThrottle;
-  static uint32_t recieveAux;
+  static short recieveThrottle;
+  static short recieveAux;
 
   // throttlePosition after it has been processed
   static short throttlePosition = 0;
@@ -76,56 +96,182 @@ void loop() {
     interrupts();
   }
 
-  // Subtract a small amount to bring the input more to the center value
-  // Override center point with offsets for better accuracy
-  throttlePosition = recieveThrottle - 20;
-  if(throttlePosition >= 1460 && throttlePosition <= 1520) throttlePosition = 1500;
+  
+  if(recieveAux > 1700){
+    digitalWrite(statusLEDPin, HIGH);
+  }else{
+    digitalWrite(statusLEDPin, LOW);
+  }
+  
 
-  // If Aux has had a change lets toggle cruise control
-  if(recieveThrottle || recieveAux){
-    if(recieveAux > 1800){
-      if(cruiseControl == false){
-        cruiseControl = true;
-        savedCruiseSpeed = throttlePosition;
+  // Are we entering configure mode?
+  if(operationMode == 0 && millis() < 500){
+    if(recieveAux > 1700 && (recieveThrottle < 1300 || recieveThrottle > 1700)){
+      operationMode = 1;
+    }
+  // Go to normal operating mode after 500ms, this gives time to enter config mode and for reciever to start before passing data to ESC
+  }else if(operationMode == 0 && millis() > 500){
+    operationMode = 2;
+  }
+
+  // We are in configure mode
+  // Process each step so we can calc various offset data and throttle direction
+  if(operationMode == 1){
+    //cReverseStartingPos is set when operatingMode = 1 is set
+
+    // Stage 0 - Config start indicator
+    if(configureStage == 0){
+        digitalWrite(statusLEDPin, HIGH);
+        delay(500);
+        digitalWrite(statusLEDPin, LOW);
+        delay(500);
+        digitalWrite(statusLEDPin, HIGH);
+        delay(500);
+        digitalWrite(statusLEDPin, LOW);
+        delay(500);
+        digitalWrite(statusLEDPin, HIGH);
+        
+        cReverseStartingPos = recieveThrottle;
+        configureStage = 1;
+    }
+    
+    // Step 1 - Reverse to Center then toggle Aux
+    if(configureStage == 1){
+      if(recieveAux < 1300){
+        cReverseToCenter = recieveThrottle;
+        configureStage = 2;
       }
+    }
+
+    // Step 2 - Center to Full Throttle then toggle Aux
+    if(configureStage == 2){
+      if(recieveAux > 1700){
+        cCenterToThrottle = recieveThrottle;
+        configureStage = 3;
+      }
+    }
+
+    // Step 3 - Full Throttle to Center then toggle Aux
+    if(configureStage == 3){
+      if(recieveAux < 1300){
+        cThrottleToCenter = recieveThrottle;
+        configureStage = 4;
+      }
+    }
+
+    // Step 4 - Process config data and save
+    if(configureStage == 4){
+      // Calculate config settings
+      reversedRecieverInput = (cReverseStartingPos > 1700) ? true : false;
+      reverseCenterOffset = abs(cReverseToCenter - 1500) * 2;
+      throttleCenterOffset = abs(cThrottleToCenter - 1500) * 2;
+
+      // Save config settings to EEPROM
+
+      digitalWrite(statusLEDPin, HIGH);
+      delay(500);
+      digitalWrite(statusLEDPin, LOW);
+      delay(500);
+      digitalWrite(statusLEDPin, HIGH);
+      delay(500);
+      digitalWrite(statusLEDPin, LOW);
+      delay(500);
+      digitalWrite(statusLEDPin, HIGH);
+      delay(500);
+      digitalWrite(statusLEDPin, LOW);
+      delay(500);
+      digitalWrite(statusLEDPin, HIGH);
+      delay(500);
+
+      // Return values to defaults and set operationMode to normal functionality
+      configureStage = 0;
+      operationMode = 2;
+
+      return;
+    }
+    
+  }
+  
+
+  // Are we in normal operating mode?
+  if(operationMode == 2){   
+    throttlePosition = recieveThrottle;
+
+    // Set a safe area around center, this stops fluxuations triggering forward / reverse by accident
+    if(reversedRecieverInput){
+      if(throttlePosition >= (1500 - throttleCenterOffset) && throttlePosition <= (1500 + reverseCenterOffset)) throttlePosition = 1500;
     }else{
-      if(cruiseControl == true){
-        cruiseControl = false;
-        savedCruiseSpeed = 0;
+      if(throttlePosition >= (1500 - reverseCenterOffset) && throttlePosition <= (1500 + throttleCenterOffset)) throttlePosition = 1500;
+    }
+
+    // If Aux has had a change lets toggle cruise control
+    if(recieveAux){
+      if(recieveAux > 1700){
+        if(cruiseControl == false){
+          cruiseControl = true;
+          savedCruiseSpeed = throttlePosition;
+          digitalWrite(statusLEDPin, HIGH);
+        }
+      }else{
+        if(cruiseControl == true){
+          cruiseControl = false;
+          savedCruiseSpeed = 0;
+          digitalWrite(statusLEDPin, LOW);
+        }
       }
+    }
+  
+    // If reverse input while cruise enabled set saved cruse speed to 0
+    // This will lave cruse enabled but with a saved speed of 0 which is technically disabled
+    // But it means cruse will not reengage until toggled
+    if(cruiseControl && savedCruiseSpeed != 0){
+      if(reversedRecieverInput){
+        if(throttlePosition > 1500){
+          savedCruiseSpeed = 0;
+          digitalWrite(statusLEDPin, LOW);
+        }
+      }else{
+        if(throttlePosition < 1500){
+          savedCruiseSpeed = 0;
+          digitalWrite(statusLEDPin, LOW);
+        }
+      }
+    }
+
+    // IMPORTANT - This is where the throttlePosition may be overwritten with the cruise speed, any code which needs to current live throttlePosision needs to be above this line
+    // If cruise is enable used savedCruiseSpeed unless user input throttle is greater than savedCruiseSpeed
+    // If cruise is disabled just use the live throttlePosition
+    if(!cruiseControl){
+      throttlePosition = throttlePosition;
+    }else{
+      if(reversedRecieverInput){
+        throttlePosition = (savedCruiseSpeed == 0 || throttlePosition < savedCruiseSpeed) ? throttlePosition : savedCruiseSpeed;
+      }else{
+        throttlePosition = (savedCruiseSpeed == 0 || throttlePosition > savedCruiseSpeed) ? throttlePosition : savedCruiseSpeed;
+      }
+    }
+  
+    //Serial.print(cruiseControl);
+    //Serial.print(" - ");
+    //Serial.print(savedCruiseSpeed);
+    //Serial.print(" - ");
+    //Serial.println(throttlePosition);
+  
+    // Output servo throttle every 20ms
+    // http://webboggles.com/pwm-servo-control-with-attiny85/
+    // Send a pulse every 20 ms that is in the range between 1000 and 2000 nanoseconds
+    if(millis() > lastMillis + 20){
+      PORTD |= 1<<recieverOutPinBit; // Set bit 7 high (Pin 7)
+      unsigned long start = micros();
+      while (micros() < start + throttlePosition){} // Wait duration of throttle position
+      PORTD &= ~(1<<recieverOutPinBit); // Set bit 7 low (Pin 7)
+      lastMillis = millis(); // reset timer
     }
   }
 
-  // If reverse input while cruise enabled set saved cruse speed to 0
-  // This will lave cruse enabled but with a saved speed of 0 which is technically disabled
-  // But it means cruse will not reengage until toggled
-  if(throttlePosition < 1500 && cruiseControl) savedCruiseSpeed = 0;
+  
 
-  // IMPORTANT - This is where the throttlePosition may be overwritten with the cruise speed, any code which needs to current live throttlePosision needs to be above this line
-  // If cruise is enable used savedCruiseSpeed unless user input throttle is greater than savedCruiseSpeed
-  // If cruise is disabled just use the live throttlePosition
-  if(!cruiseControl){
-    throttlePosition = throttlePosition;
-  }else{
-    throttlePosition = (throttlePosition > savedCruiseSpeed) ? throttlePosition : savedCruiseSpeed;
-  }
 
-  //Serial.print(cruiseControl);
-  //Serial.print(" - ");
-  //Serial.print(savedCruiseSpeed);
-  //Serial.print(" - ");
-  //Serial.println(throttlePosition);
-
-  // Output servo throttle every 20ms
-  // http://webboggles.com/pwm-servo-control-with-attiny85/
-  // Send a pulse every 20 ms that is in the range between 1000 and 2000 nanoseconds
-  if(millis() > lastMillis + 20){
-    PORTD |= 1<<recieverOutPinBit; // Set bit 7 high (Pin 7)
-    unsigned long start = micros();
-    while (micros() < start + throttlePosition){} // Wait duration of throttle position
-    PORTD &= ~(1<<recieverOutPinBit); // Set bit 7 low (Pin 7)
-    lastMillis = millis(); // reset timer
-  }
 }
 
 /*
