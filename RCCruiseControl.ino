@@ -1,8 +1,6 @@
 // TODO: No signal disable cruise
-// TODO: Determine center off-set automatically
-// TODO: Determine forward / reverse directions
+// TODO: Save to EEPROM / Read from EEPROM
 // TODO: Test on other recievers / setups
-// TODO: Trigger programming mode (AUX + Break) on startup within 500ms of starting
 
 /*
  * Pin assignemnt
@@ -20,23 +18,26 @@ const short statusLEDPinBit = 5;
 /*
  * Variables
  */
-volatile short recieveThrottleShared = 0; // Recieve position data (shared between interrupt and main loop)
-volatile short recieveAuxShared = 0; // Recieve position data (shared between interrupt and main loop)
-bool cruiseControl = false;
-short savedCruiseSpeed = 0;
-unsigned long lastMillis = 0;
-unsigned short operationMode = 0;
-unsigned short configureStage = 0;
+volatile short recieveThrottleShared; // Recieve position data (shared between interrupt and main loop)
+volatile short recieveAuxShared; // Recieve position data (shared between interrupt and main loop)
+bool cruiseControl = false; // Is cruise active
+short savedCruiseSpeed; // Saved throttle position for cruise
+unsigned short operationMode; // 0 = not started, 1 = config mode, 2 = normal mode
+unsigned short configureStage; // If in config mode what stage of the config progress
+
+// Time keeping variables
+unsigned long lastMillisRecieverOutput; // Last time output to the reciever
+unsigned long lastMillisRecieverThrottleInput, lastMillisRecieverAuxInput; // Last time recieved reciever input
 
 // Config variables for storing data during config mode
 // These are parsed and saved into the EEPROM
 short cReverseStartingPos, cReverseToCenter, cCenterToThrottle, cThrottleToCenter;
 
-
+// Configurable settings set by entering configure mode using handset
+// Loaded from EEPROM
 bool reversedRecieverInput = false; // Do we have reversed reciever input? E.G 1000 is full throttle instead of 2000
-short reverseCenterOffset = 20;
-short throttleCenterOffset = 20;
-
+unsigned short reverseCenterOffset = 20;
+unsigned short throttleCenterOffset = 20;
 
 
 
@@ -77,6 +78,7 @@ void loop() {
     // Map shared data to local variables
     recieveThrottle = recieveThrottleShared;
     recieveThrottleShared = 0;
+    lastMillisRecieverThrottleInput = millis();
 
     // Enable interrupts, by doing this shared to local assignment it allows us to continue processing, but also allows the interrupts to continue firing and collecting data
     // After this line we can now perform are slower processing of the reciever data without worry of holding back any interrupts
@@ -91,16 +93,13 @@ void loop() {
     // Map shared data to local variables
     recieveAux = recieveAuxShared;
     recieveAuxShared = 0;
+    lastMillisRecieverAuxInput = millis();
 
     // Enable interrupts, by doing this shared to local assignment it allows us to continue processing, but also allows the interrupts to continue firing and collecting data
     // After this line we can now perform are slower processing of the reciever data without worry of holding back any interrupts
     interrupts();
   }
-
-
-
   
-
   // Are we entering configure mode?
   if(operationMode == 0 && millis() < 500){
     if(recieveAux > 1700 && (recieveThrottle < 1300 || recieveThrottle > 1700)){
@@ -253,6 +252,28 @@ void loop() {
         throttlePosition = (savedCruiseSpeed == 0 || throttlePosition > savedCruiseSpeed) ? throttlePosition : savedCruiseSpeed;
       }
     }
+
+    // Stop if bad signal E.G outside normal operation paramaters as this is probably sign of a connection issue
+    // No signal from reciever for +50ms, disable cruise and default to idle position
+    // Its possible we could loss just one signal wire for example Throttle, so we check both Throttle and Aux for loss of signal
+    if(throttlePosition < 900 || throttlePosition > 2300 || recieveAux < 900 | recieveAux > 2300 || millis() - lastMillisRecieverThrottleInput > 100 || millis() - lastMillisRecieverAuxInput > 100){
+      //Serial.print("lastMillisRecieverThrottleInput: ");
+      //Serial.println(millis() - lastMillisRecieverThrottleInput);
+
+      //Serial.print("lastMillisRecieverAuxInput: ");
+      //Serial.println(millis() - lastMillisRecieverAuxInput);
+      
+      //Serial.print("throttlePosition: ");
+      //Serial.println(throttlePosition);
+
+      //Serial.print("recieveAux: ");
+      //Serial.println(recieveAux);
+      
+      cruiseControl = false;
+      savedCruiseSpeed = 0;
+      throttlePosition = 1500;
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
+    }
   
     //Serial.print(cruiseControl);
     //Serial.print(" - ");
@@ -263,18 +284,14 @@ void loop() {
     // Output servo throttle every 20ms
     // http://webboggles.com/pwm-servo-control-with-attiny85/
     // Send a pulse every 20 ms that is in the range between 1000 and 2000 nanoseconds
-    if(millis() > lastMillis + 20){
+    if(millis() > lastMillisRecieverOutput + 20){
       PORTD |= 1<<recieverOutPinBit; // Set bit 7 high (Pin 7)
       unsigned long start = micros();
       while (micros() < start + throttlePosition){} // Wait duration of throttle position
       PORTD &= ~(1<<recieverOutPinBit); // Set bit 7 low (Pin 7)
-      lastMillis = millis(); // reset timer
+      lastMillisRecieverOutput = millis(); // reset timer
     }
   }
-
-  
-
-
 }
 
 /*
