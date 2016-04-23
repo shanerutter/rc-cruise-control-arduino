@@ -15,6 +15,7 @@ const short recieverAuxInterruptPin = 1; // Reciever input (Interrupt), same pin
 const short recieverOutPin = 7; // Pin used for killing engine
 const short recieverOutPinBit = 7; // Related to "PORTD" bit mapping (fast updating via bit mapping)
 const short statusLEDPin = 13;
+const short statusLEDPinBit = 5;
 
 /*
  * Variables
@@ -52,7 +53,7 @@ void setup() {
     attachInterrupt(recieverAuxInterruptPin, calcRecieverAuxPin, CHANGE); // Trigger interrupt and call calcRecieverPin runction each time a change is detected
 
     pinMode(statusLEDPin, OUTPUT);
-    digitalWrite(statusLEDPin, LOW);
+    PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
 
     //Serial.begin(9600);
 }
@@ -96,12 +97,8 @@ void loop() {
     interrupts();
   }
 
-  
-  if(recieveAux > 1700){
-    digitalWrite(statusLEDPin, HIGH);
-  }else{
-    digitalWrite(statusLEDPin, LOW);
-  }
+
+
   
 
   // Are we entering configure mode?
@@ -119,20 +116,27 @@ void loop() {
   if(operationMode == 1){
     //cReverseStartingPos is set when operatingMode = 1 is set
 
+    if(recieveAux > 1700){
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
+    }else{
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
+    }
+
     // Stage 0 - Config start indicator
     if(configureStage == 0){
-        digitalWrite(statusLEDPin, HIGH);
-        delay(500);
-        digitalWrite(statusLEDPin, LOW);
-        delay(500);
-        digitalWrite(statusLEDPin, HIGH);
-        delay(500);
-        digitalWrite(statusLEDPin, LOW);
-        delay(500);
-        digitalWrite(statusLEDPin, HIGH);
+      // Indicate config started
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
+      delay(500);
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
+      delay(500);
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
+      delay(500);
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
+      delay(500);
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
         
-        cReverseStartingPos = recieveThrottle;
-        configureStage = 1;
+      cReverseStartingPos = recieveThrottle;
+      configureStage = 1;
     }
     
     // Step 1 - Reverse to Center then toggle Aux
@@ -168,20 +172,23 @@ void loop() {
 
       // Save config settings to EEPROM
 
-      digitalWrite(statusLEDPin, HIGH);
+
+      // Indicate config completed
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
       delay(500);
-      digitalWrite(statusLEDPin, LOW);
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
       delay(500);
-      digitalWrite(statusLEDPin, HIGH);
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
       delay(500);
-      digitalWrite(statusLEDPin, LOW);
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
       delay(500);
-      digitalWrite(statusLEDPin, HIGH);
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
       delay(500);
-      digitalWrite(statusLEDPin, LOW);
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
       delay(500);
-      digitalWrite(statusLEDPin, HIGH);
+      PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
       delay(500);
+      PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
 
       // Return values to defaults and set operationMode to normal functionality
       configureStage = 0;
@@ -194,7 +201,7 @@ void loop() {
   
 
   // Are we in normal operating mode?
-  if(operationMode == 2){   
+  if(operationMode == 2){
     throttlePosition = recieveThrottle;
 
     // Set a safe area around center, this stops fluxuations triggering forward / reverse by accident
@@ -210,13 +217,13 @@ void loop() {
         if(cruiseControl == false){
           cruiseControl = true;
           savedCruiseSpeed = throttlePosition;
-          digitalWrite(statusLEDPin, HIGH);
+          PORTB |= 1<<statusLEDPinBit; // Set bit 5 high (Pin 13)
         }
       }else{
         if(cruiseControl == true){
           cruiseControl = false;
           savedCruiseSpeed = 0;
-          digitalWrite(statusLEDPin, LOW);
+          PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
         }
       }
     }
@@ -226,16 +233,12 @@ void loop() {
     // But it means cruse will not reengage until toggled
     if(cruiseControl && savedCruiseSpeed != 0){
       if(reversedRecieverInput){
-        if(throttlePosition > 1500){
-          savedCruiseSpeed = 0;
-          digitalWrite(statusLEDPin, LOW);
-        }
+        if(throttlePosition > 1500) savedCruiseSpeed = 0;
       }else{
-        if(throttlePosition < 1500){
-          savedCruiseSpeed = 0;
-          digitalWrite(statusLEDPin, LOW);
-        }
+        if(throttlePosition < 1500) savedCruiseSpeed = 0;
       }
+
+      if(savedCruiseSpeed == 0) PORTB &= ~(1<<statusLEDPinBit); // Set bit 5 low (Pin 13)
     }
 
     // IMPORTANT - This is where the throttlePosition may be overwritten with the cruise speed, any code which needs to current live throttlePosision needs to be above this line
