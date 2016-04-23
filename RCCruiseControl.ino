@@ -1,4 +1,3 @@
-// TODO: No signal disable cruise
 // TODO: Save to EEPROM / Read from EEPROM
 // TODO: Test on other recievers / setups
 
@@ -256,7 +255,7 @@ void loop() {
     // Stop if bad signal E.G outside normal operation paramaters as this is probably sign of a connection issue
     // No signal from reciever for +50ms, disable cruise and default to idle position
     // Its possible we could loss just one signal wire for example Throttle, so we check both Throttle and Aux for loss of signal
-    if(throttlePosition < 900 || throttlePosition > 2300 || recieveAux < 900 | recieveAux > 2300 || millis() - lastMillisRecieverThrottleInput > 100 || millis() - lastMillisRecieverAuxInput > 100){
+    if(throttlePosition < 900 || throttlePosition > 2300 || recieveAux < 900 | recieveAux > 2300 || millis() - lastMillisRecieverThrottleInput > 50 || millis() - lastMillisRecieverAuxInput > 50){
       //Serial.print("lastMillisRecieverThrottleInput: ");
       //Serial.println(millis() - lastMillisRecieverThrottleInput);
 
